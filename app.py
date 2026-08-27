@@ -1,7 +1,6 @@
 import asyncio,re,shutil,subprocess,tempfile,os,requests
 from pathlib import Path
 import streamlit as st
-
 st.set_page_config(page_title="Movie Recap AI",page_icon="🎬",layout="wide")
 MAX_MB=1024
 VOICES={"🇲🇲 Myanmar Male":"my-MM-ThihaNeural","🇲🇲 Myanmar Female":"my-MM-NilarNeural"}
@@ -80,18 +79,21 @@ def render(v,a,s,o,vertical):
 def download_video(url,o):
  try:
   import yt_dlp
-  opts={"outtmpl":str(o.with_suffix(".%(ext)s")),"format":"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b","merge_output_format":"mp4","noplaylist":True,"quiet":True,"no_warnings":True}
+  f=ffmpeg()
+  opts={"outtmpl":str(o.with_suffix(".%(ext)s")),"format":"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b","merge_output_format":"mp4","noplaylist":True,"quiet":True,"no_warnings":True,"ffmpeg_location":str(Path(f).parent)}
   with yt_dlp.YoutubeDL(opts) as ydl:
    info=ydl.extract_info(url,download=True); path=Path(ydl.prepare_filename(info))
    for c in [o,path,path.with_suffix(".mp4")]:
     if c.exists() and c.stat().st_size:
-     if c!=o:c.rename(o)
+     if c!=o:
+      if o.exists():o.unlink()
+      c.rename(o)
      if o.stat().st_size>MAX_MB*1024*1024:raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
      return
  except Exception as first:
   try:
-   r=requests.get(url,stream=True,timeout=90,headers={"User-Agent":"Mozilla/5.0 MovieRecapAI"}); r.raise_for_status()
-   if "text/html" in r.headers.get("content-type","").lower(): raise RuntimeError(str(first))
+   r=requests.get(url,stream=True,timeout=90,headers={"User-Agent":"Mozilla/5.0 MovieRecapAI"});r.raise_for_status()
+   if "text/html" in r.headers.get("content-type","").lower():raise RuntimeError(str(first))
    n=0
    with open(o,"wb") as f:
     for b in r.iter_content(1024*1024):
@@ -111,7 +113,7 @@ def youtube_search(q,token="",limit=20):
  items=[]
  for x in data.get("items",[]):
   vid=x.get("id",{}).get("videoId")
-  if vid: items.append({"title":x.get("snippet",{}).get("title",""),"channel":x.get("snippet",{}).get("channelTitle",""),"url":f"https://www.youtube.com/watch?v={vid}"})
+  if vid:items.append({"title":x.get("snippet",{}).get("title",""),"channel":x.get("snippet",{}).get("channelTitle",""),"url":f"https://www.youtube.com/watch?v={vid}"})
  return items,data.get("nextPageToken","")
 
 st.title("🎬 Movie Recap AI")
@@ -120,57 +122,43 @@ with st.sidebar:
  vertical=st.selectbox("📱 Video Format",["9:16","16:9"])=="9:16"
  voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES))
  st.info("🎯 Target: ဇာတ်လမ်းကို ~10 မိနစ်အတွင်း အကျဉ်းချုပ်")
-
-if "yt_results" not in st.session_state: st.session_state.yt_results=[]
-if "yt_token" not in st.session_state: st.session_state.yt_token=""
-if "selected_url" not in st.session_state: st.session_state.selected_url=""
-
+if "yt_results" not in st.session_state:st.session_state.yt_results=[]
+if "yt_token" not in st.session_state:st.session_state.yt_token=""
+if "selected_url" not in st.session_state:st.session_state.selected_url=""
 st.subheader("🔎 YouTube မှာ ပြန်လည်အသုံးပြုခွင့်သတ်မှတ်ထားတဲ့ Video ရှာရန်")
 q=st.text_input("Search",value="Chinese drama Creative Commons",placeholder="ဥပမာ — Chinese short film, Chinese drama")
 c1,c2=st.columns([1,1])
 with c1:
  if st.button("🔎 Search YouTube",use_container_width=True):
-  try:
-   st.session_state.yt_results,st.session_state.yt_token=youtube_search(q.strip() or "Chinese drama")
-  except Exception as e: st.error(f"YouTube Search Error: {e}")
+  try:st.session_state.yt_results,st.session_state.yt_token=youtube_search(q.strip() or "Chinese drama")
+  except Exception as e:st.error(f"YouTube Search Error: {e}")
 with c2:
  if st.button("➕ Load More",use_container_width=True) and st.session_state.yt_token:
   try:
-   more,token=youtube_search(q.strip() or "Chinese drama",st.session_state.yt_token)
-   st.session_state.yt_results.extend(more); st.session_state.yt_token=token
-  except Exception as e: st.error(f"Load More Error: {e}")
-
+   more,token=youtube_search(q.strip() or "Chinese drama",st.session_state.yt_token);st.session_state.yt_results.extend(more);st.session_state.yt_token=token
+  except Exception as e:st.error(f"Load More Error: {e}")
 for i,item in enumerate(st.session_state.yt_results):
- col1,col2=st.columns([5,1])
- with col1: st.markdown(f"**{i+1}. {item['title']}**  \n`{item['channel']}`")
- with col2:
-  if st.button("သုံးမယ်",key=f"yt_{i}"): st.session_state.selected_url=item["url"]; st.rerun()
-
-if st.session_state.selected_url:
- st.success("✅ YouTube link ရွေးပြီးပါပြီ")
- url=st.text_input("🔗 Selected Video Link",value=st.session_state.selected_url)
-else:
- url=st.text_input("🔗 Movie Video Link",placeholder="YouTube / supported video page / direct video URL")
-
+ col1,col2=st.columns([5,1]);col1.markdown(f"**{i+1}. {item['title']}**  \n`{item['channel']}`")
+ if col2.button("သုံးမယ်",key=f"yt_{i}"):st.session_state.selected_url=item["url"];st.rerun()
+if st.session_state.selected_url:st.success("✅ YouTube link ရွေးပြီးပါပြီ")
+url=st.text_input("🔗 Movie Video Link",value=st.session_state.selected_url,placeholder="YouTube / supported video page / direct video URL")
 up=st.file_uploader("🎞️ Movie Video (max 1 GB)",type=["mp4","mkv","mov","avi","webm"])
 if st.button("🚀 Generate Myanmar Movie Recap",type="primary",use_container_width=True):
- if not up and not url.strip(): st.error("❌ Video Upload လုပ်ပါ သို့မဟုတ် Video Link ထည့်ပါ။"); st.stop()
+ if not up and not url.strip():st.error("❌ Video Upload လုပ်ပါ သို့မဟုတ် Video Link ထည့်ပါ။");st.stop()
  try:
   with tempfile.TemporaryDirectory() as td:
-   td=Path(td); video=td/"movie.mp4"; audio=td/"audio.wav"; voicefile=td/"voice.mp3"; sub=td/"mm.srt"; out=td/"movie_recap_mm.mp4"
+   td=Path(td);video=td/"movie.mp4";audio=td/"audio.wav";voicefile=td/"voice.mp3";sub=td/"mm.srt";out=td/"movie_recap_mm.mp4"
    if up:
-    if up.size>MAX_MB*1024*1024: raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
-    with st.spinner("📥 Uploaded movie ကိုဖတ်နေပါတယ်..."): video.write_bytes(up.getbuffer())
+    if up.size>MAX_MB*1024*1024:raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
+    with st.spinner("📥 Uploaded movie ကိုဖတ်နေပါတယ်..."):video.write_bytes(up.getbuffer())
    else:
-    with st.spinner("🔗 Video ကို ရယူနေပါတယ်..."): download_video(url.strip(),video)
+    with st.spinner("🔗 Video ကို ရယူနေပါတယ်..."):download_video(url.strip(),video)
    with st.spinner("🎧 Movie အသံကို စာသားပြောင်းနေပါတယ်..."):
-    cmd(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio)])
-    text=transcribe(audio)
-   if not text.strip(): raise RuntimeError("Movie dialogue မတွေ့ပါ။")
-   with st.spinner("🌍 မြန်မာလို Recap Script ပြုလုပ်နေပါတယ်..."): script=recap10(translate_mm(text))
-   st.text_area("🇲🇲 Myanmar Recap Script",script,height=240)
-   with st.spinner("🎙️ မြန်မာအသံဖန်တီးနေပါတယ်..."): tts(script,VOICES[voice],voicefile)
-   d=dur(voicefile); make_srt(script,d,sub)
-   with st.spinner("🎬 Movie Scene + Myanmar Voice + Subtitle ပေါင်းနေပါတယ်..."): render(video,voicefile,sub,out,vertical)
-   data=out.read_bytes(); st.success(f"✅ ပြီးပါပြီ — {d/60:.1f} မိနစ်"); st.video(data); st.download_button("⬇️ Download MP4",data,"movie_recap_mm.mp4","video/mp4")
- except Exception as e: st.error(f"❌ Error: {e}")
+    cmd(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio)]);text=transcribe(audio)
+   if not text.strip():raise RuntimeError("Movie dialogue မတွေ့ပါ။")
+   with st.spinner("🌍 မြန်မာလို Recap Script ပြုလုပ်နေပါတယ်..."):script=recap10(translate_mm(text))
+   with st.spinner("🎙️ မြန်မာအသံဖန်တီးနေပါတယ်..."):tts(script,VOICES[voice],voicefile)
+   d=dur(voicefile);make_srt(script,d,sub)
+   with st.spinner("🎬 Movie Scene + Myanmar Voice + Subtitle ပေါင်းနေပါတယ်..."):render(video,voicefile,sub,out,vertical)
+   data=out.read_bytes();st.success(f"✅ ပြီးပါပြီ — {d/60:.1f} မိနစ်");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap_mm.mp4","video/mp4")
+ except Exception as e:st.error(f"❌ Error: {e}")
