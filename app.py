@@ -17,11 +17,12 @@ def binpath(name):
    import imageio_ffmpeg; return imageio_ffmpeg.get_ffmpeg_exe()
   except Exception:pass
  return None
-def run_cmd(cmd):
- exe=binpath(cmd[0])
- if not exe:raise RuntimeError(f"{cmd[0]} executable မတွေ့ပါ။")
- r=subprocess.run([exe,*cmd[1:]],capture_output=True,text=True)
- if r.returncode:raise RuntimeError(r.stderr[-4000:])
+def run_cmd(args):
+ exe=binpath(args[0])
+ if not exe:raise RuntimeError(f"{args[0]} executable မတွေ့ပါ။")
+ r=subprocess.run([exe,*args[1:]],capture_output=True,text=True)
+ if r.returncode:raise RuntimeError(r.stderr[-5000:])
+ return r.stdout
 def extract_audio(video,audio):run_cmd(["ffmpeg","-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio)])
 @st.cache_resource(show_spinner=False)
 def load_whisper():
@@ -79,15 +80,23 @@ def render(source,narration,srt,out,aspect):
  run_cmd(["ffmpeg","-y","-stream_loop","-1","-i",str(source),"-i",str(narration),"-t",f"{sec:.3f}","-vf",vf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","25","-c:a","aac","-b:a","128k","-shortest",str(out)])
 def download_youtube(url,folder):
  from yt_dlp import YoutubeDL
- # Prefer a single-file MP4 first; this avoids yt-dlp needing to merge formats.
- opts={"outtmpl":str(Path(folder)/"youtube_source.%(ext)s"),"format":"best[ext=mp4]/best","noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"fragment_retries":2,"socket_timeout":30}
- with YoutubeDL(opts) as ydl:
-  info=ydl.extract_info(url,download=True);prepared=Path(ydl.prepare_filename(info))
- for p in [prepared,prepared.with_suffix(".mp4"),Path(folder)/"youtube_source.mp4"]:
-  if p.exists() and p.stat().st_size:return p
- matches=list(Path(folder).glob("youtube_source.*"))
- if matches:return matches[0]
- raise RuntimeError("YouTube video download ပြီးပေမယ့် video file မတွေ့ပါ။")
+ ff=binpath("ffmpeg")
+ # Try a single-file MP4 first; if unavailable, use best video+audio and explicitly tell yt-dlp where bundled FFmpeg is.
+ common={"outtmpl":str(Path(folder)/"youtube_source.%(ext)s"),"noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"fragment_retries":2,"socket_timeout":30}
+ attempts=[{"format":"best[ext=mp4]/best"},{"format":"bestvideo+bestaudio/best","merge_output_format":"mp4","ffmpeg_location":ff}]
+ last=None
+ for extra in attempts:
+  try:
+   opts={**common,**extra}
+   with YoutubeDL(opts) as ydl:
+    info=ydl.extract_info(url,download=True);prepared=Path(ydl.prepare_filename(info))
+   candidates=[prepared,prepared.with_suffix(".mp4"),Path(folder)/"youtube_source.mp4"]
+   for p in candidates:
+    if p.exists() and p.stat().st_size:return p
+   matches=list(Path(folder).glob("youtube_source.*"))
+   if matches:return max(matches,key=lambda p:p.stat().st_size)
+  except Exception as e:last=e
+ raise RuntimeError(f"YouTube download မအောင်မြင်ပါ: {last}")
 st.title("🎬 Movie Recap AI");st.caption("Upload a video or use an authorized direct video URL.")
 with st.sidebar:
  language=st.selectbox("Recap Language",["မြန်မာဘာသာ","English"]);voice_name=st.selectbox("🎙️ Voice",list(VOICE_OPTIONS));aspect=st.selectbox("📱 Video Format",["9:16","16:9"]);st.info("Free: 5 recaps/day • Maximum output: 10 minutes");st.caption("⚠️ Use videos you own or have permission to transform/publish.")
@@ -118,11 +127,9 @@ if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
    with st.spinner("🎧 Extracting audio..."):extract_audio(source,audio)
    with st.spinner("🗣️ Transcribing with low-memory Whisper..."):transcript=transcribe(audio)
    if not transcript:raise ValueError("Speech/dialogue မတွေ့ပါ။")
-   st.subheader("✍️ Recap Script");recap=generate_recap(transcript,language);st.text_area("Recap",recap,height=280)
-   with st.spinner("🎙️ Generating AI voice..."):tts(recap,VOICE_OPTIONS[voice_name],narration)
-   sec=duration(narration)
-   if sec>MAX_RECAP_MINUTES*60:raise ValueError("Narration က 10 မိနစ်ကျော်သွားပါတယ်။")
-   make_srt(recap,sec,srt)
+   script=generate_recap(transcript,language);st.text_area("✍️ Recap Script",script,height=280)
+   with st.spinner("🎙️ Generating AI voice..."):tts(script,VOICE_OPTIONS[voice_name],narration)
+   d=duration(narration);make_srt(script,d,srt)
    with st.spinner("🎬 Rendering MP4..."):render(source,narration,srt,out,aspect)
-   data=out.read_bytes();st.success(f"✅ Finished — {sec/60:.1f} minutes");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap.mp4","video/mp4")
+   data=out.read_bytes();st.success(f"✅ Finished — {d/60:.1f} minutes");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap.mp4","video/mp4")
  except Exception as e:st.error(f"❌ Error: {e}")
