@@ -1,0 +1,7 @@
+streamlit
+transformers>=4.45
+accelerate
+torch
+torchaudio
+sentencepiece
+ffmpeg-python
