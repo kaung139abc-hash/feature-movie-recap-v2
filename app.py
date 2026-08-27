@@ -2,7 +2,7 @@ import asyncio,re,shutil,subprocess,tempfile,json
 from pathlib import Path
 import streamlit as st
 st.set_page_config(page_title="Movie Recap AI",page_icon="🎬",layout="wide")
-MAX_UPLOAD_MB=1024
+MAX_UPLOAD_MB=1024; TARGET_WORDS=1500
 VOICES={"🇲🇲 Myanmar Male":"my-MM-ThihaNeural","🇲🇲 Myanmar Female":"my-MM-NilarNeural"}
 def ffmpeg():
  p=shutil.which("ffmpeg")
@@ -11,10 +11,6 @@ def ffmpeg():
 def cmd(args):
  r=subprocess.run([ffmpeg(),*args],capture_output=True,text=True)
  if r.returncode:raise RuntimeError(r.stderr[-3500:])
-def duration(p):
- r=subprocess.run([ffmpeg(),"-i",str(p)],capture_output=True,text=True);m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr)
- if not m:raise RuntimeError("Media duration မဖတ်နိုင်ပါ။")
- return int(m[1])*3600+int(m[2])*60+float(m[3])
 def chunks(text,n=240):
  parts=re.split(r"(?<=[.!?။])\s+|(?<=၊)\s+",(text or "").strip());out=[]
  for p in parts:
@@ -40,13 +36,19 @@ def to_myanmar(text):
  except Exception as e:raise RuntimeError("မြန်မာဘာသာပြန် service မရနိုင်သေးပါ။ Internet connection ကိုစစ်ပြီး ပြန်စမ်းပါ။") from e
 def recap(text):
  s=chunks(text,240)
- if len(s)<=240:return " ".join(s)
- ids=sorted(set(round(i*(len(s)-1)/239) for i in range(240)))
+ if not s:return ""
+ target=240
+ if len(s)<=target:return " ".join(s)
+ ids=sorted(set(round(i*(len(s)-1)/(target-1)) for i in range(target)))
  return " ".join(s[i] for i in ids)
 def tts(text,voice,out):
  import edge_tts
  async def go():await edge_tts.Communicate(text,voice).save(str(out))
  asyncio.run(go())
+def duration(p):
+ r=subprocess.run([ffmpeg(),"-i",str(p)],capture_output=True,text=True);m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr)
+ if not m:raise RuntimeError("Media duration မဖတ်နိုင်ပါ။")
+ return int(m[1])*3600+int(m[2])*60+float(m[3])
 def make_srt(text,secs,out):
  a=chunks(text,180);weights=[max(1,len(x.replace(" ",""))) for x in a];tot=sum(weights);cur=0;rows=[]
  def ts(x):
@@ -88,12 +90,10 @@ def public_movies():
  except:return []
 st.title("🎬 Movie Recap AI");st.caption("International movies → Myanmar recap → Myanmar voice → Myanmar subtitles → MP4")
 with st.sidebar:
- vertical=st.selectbox("📱 Format",["9:16","16:9"])=="9:16";voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES));st.info("Recap length is automatic");st.caption("Use content you own, have permission to transform, or public-domain content.")
-movies=public_movies()
+ vertical=st.selectbox("📱 Format",["9:16","16:9"])=="9:16";voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES));st.info("Target: about 10 minutes");st.caption("Use content you own, have permission to transform, or public-domain content.")
+movies=public_movies();pick="— မရွေးသေး —"
 if movies:
- st.subheader("🎞️ Public-domain Movie Library")
- labels=[m["title"] for m in movies];pick=st.selectbox("Movie ရွေးပါ",["— မရွေးသေး —"]+labels)
- if pick!="— မရွေးသေး —":st.caption(next(m["url"] for m in movies if m["title"]==pick))
+ st.subheader("🎞️ Public-domain Movie Library");labels=[m["title"] for m in movies];pick=st.selectbox("Movie ရွေးပါ",["— မရွေးသေး —"]+labels)
 up=st.file_uploader("🎞️ Movie (max 1 GB)",type=["mp4","mkv","mov","avi","webm"]);url=st.text_input("🔗 YouTube or direct video URL")
 if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
  if not up and not url and pick=="— မရွေးသေး —":st.warning("Movie ရွေးပါ၊ Movie upload လုပ်ပါ၊ သို့မဟုတ် URL ထည့်ပါ။");st.stop()
@@ -103,23 +103,23 @@ if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
    if up:
     if up.size>MAX_UPLOAD_MB*1024*1024:raise ValueError("Movie က 1GB ကျော်နေပါတယ်။")
     with st.spinner("📥 Saving movie..."):src.write_bytes(up.getbuffer())
-    with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
    elif url and re.search(r"(?:youtube\.com|youtu\.be)",url,re.I):
-    with st.spinner("🔗 Reading YouTube transcript..."):text=youtube_transcript(url)
-    text=to_myanmar(text)
-    raise RuntimeError("YouTube transcript ကို မြန်မာ recap အဖြစ်ပြောင်းနိုင်ပေမယ့် movie scene/video ကို YouTube မှာ အလိုအလျောက် download မလုပ်ပါ။ Video Scene ပါတဲ့ MP4 အတွက် public-domain movie ကို library မှာရွေးပါ သို့မဟုတ် ကိုယ်ပိုင် video upload လုပ်ပါ။")
+    with st.spinner("🔗 Reading YouTube transcript..."):text=to_myanmar(youtube_transcript(url))
+    st.text_area("✍️ Myanmar Recap",recap(text),height=260)
+    raise RuntimeError("YouTube transcript ကို မြန်မာ recap အဖြစ်လုပ်နိုင်ပါတယ်။ Movie Scene ပါတဲ့ MP4 ထုတ်ဖို့ public-domain movie ကို Library မှာရွေးပါ သို့မဟုတ် video file ကို upload လုပ်ပါ။")
    elif url:
     with st.spinner("🔗 Downloading direct video..."):direct_download(url,src)
-    with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
    else:
     movie=next(m for m in movies if m["title"]==pick)
-    with st.spinner("🔗 Opening public-domain movie source..."):direct_download(movie["url"],src)
-    with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
-   if not text.strip():raise ValueError("အသံ/Transcript မတွေ့ပါ။")
+    with st.spinner("🔗 Downloading public-domain movie..."):direct_download(movie["url"],src)
+   with st.spinner("🎧 Transcribing the full movie..."):
+    cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
+   if not text.strip():raise ValueError("Movie dialogue မတွေ့ပါ။")
    with st.spinner("🌐 Translating international dialogue to Myanmar..."):my_text=to_myanmar(text)
-   script=recap(my_text);st.text_area("✍️ Myanmar Recap",script,height=260)
+   with st.spinner("📝 Building full-story recap..."):script=recap(my_text)
+   st.text_area("✍️ Myanmar Recap",script,height=260)
    with st.spinner("🎙️ Creating Myanmar voice..."):tts(script,VOICES[voice],vo)
    d=duration(vo);make_srt(script,d,sub)
-   with st.spinner("🎬 Rendering MP4 with movie scenes..."):render(src,vo,sub,out,vertical)
+   with st.spinner("🎬 Rendering movie scenes + Myanmar voice + subtitles..."):render(src,vo,sub,out,vertical)
    data=out.read_bytes();st.success(f"✅ Done — {d/60:.1f} minutes");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap_mm.mp4","video/mp4")
  except Exception as e:st.error(f"❌ Error: {e}")
