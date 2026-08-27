@@ -1,38 +1,40 @@
-import asyncio,re,shutil,subprocess,tempfile,json
+import asyncio,re,shutil,subprocess,tempfile,json,html
 from pathlib import Path
 import streamlit as st
 st.set_page_config(page_title="Movie Recap AI",page_icon="🎬",layout="wide")
-MAX_MB=1024
-VOICES={"🇲🇲 Myanmar Male":"my-MM-ThihaNeural","🇲🇲 Myanmar Female":"my-MM-NilarNeural"}
+MAX_MB=1024; VOICES={"🇲🇲 Myanmar Male":"my-MM-ThihaNeural","🇲🇲 Myanmar Female":"my-MM-NilarNeural"}
 def ffmpeg():
  p=shutil.which("ffmpeg")
  if p:return p
- import imageio_ffmpeg
- return imageio_ffmpeg.get_ffmpeg_exe()
+ import imageio_ffmpeg;return imageio_ffmpeg.get_ffmpeg_exe()
 def cmd(a):
  r=subprocess.run([ffmpeg(),*a],capture_output=True,text=True)
  if r.returncode:raise RuntimeError(r.stderr[-3000:])
 def chunks(t,n=220):
  parts=re.split(r"(?<=[.!?။])\s+|(?<=၊)\s+",(t or "").strip());o=[]
  for p in parts:
+  p=p.strip()
   while len(p)>n:o.append(p[:n]);p=p[n:]
-  if p:o.append(p.strip())
+  if p:o.append(p)
  return o
 def translate_mm(t):
  if not t.strip():return t
  letters=sum(c.isalpha() for c in t);mm=sum(1 for c in t if '\u1000'<=c<='\u109f')
  if letters and mm/max(1,letters)>.35:return t
  from deep_translator import GoogleTranslator
- tr=GoogleTranslator(source="auto",target="my");words=t.split();parts=[];cur=""
- for w in words:
+ tr=GoogleTranslator(source="auto",target="my");parts=[];cur=""
+ for w in t.split():
   if cur and len(cur)+len(w)+1>3000:parts.append(cur);cur=w
   else:cur+=(" " if cur else "")+w
  if cur:parts.append(cur)
  return " ".join(tr.translate(p) for p in parts if p)
 def recap10(t):
  s=chunks(t,220)
- if len(s)<=180:return " ".join(s)
- ids=sorted(set(round(i*(len(s)-1)/179) for i in range(180)))
+ if not s:return ""
+ # Target a recap script roughly sized for 8-12 minutes of narration rather than copying the whole transcript.
+ target=150 if len(s)>150 else len(s)
+ if len(s)<=target:return " ".join(s)
+ ids=sorted(set(round(i*(len(s)-1)/(target-1)) for i in range(target)))
  return " ".join(s[i] for i in ids)
 def transcribe(p):
  from faster_whisper import WhisperModel
@@ -59,13 +61,23 @@ def render(v,a,s,o,vertical):
  cmd(["-y","-stream_loop","-1","-i",str(v),"-i",str(a),"-t",f"{sec:.2f}","-vf",vf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","27","-c:a","aac","-b:a","128k","-shortest",str(o)])
 def download_direct(url,o):
  import requests
- r=requests.get(url,stream=True,timeout=60,headers={"User-Agent":"MovieRecapAI/1.0"});r.raise_for_status();n=0
+ r=requests.get(url,stream=True,timeout=60,headers={"User-Agent":"MovieRecapAI/1.0"});r.raise_for_status();n=0;ctype=r.headers.get("content-type","").lower()
+ if "text/html" in ctype:raise RuntimeError("ဒီ link က video file မဟုတ်ဘဲ webpage ဖြစ်ပါတယ်။ Direct MP4/WebM link ထည့်ပါ။")
  with open(o,"wb") as f:
   for b in r.iter_content(1024*1024):
    if not b:continue
    n+=len(b)
    if n>MAX_MB*1024*1024:raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
    f.write(b)
+def archive_file_url(page):
+ import requests
+ from urllib.parse import urljoin
+ r=requests.get(page,timeout=30,headers={"User-Agent":"MovieRecapAI/1.0"});r.raise_for_status();text=r.text
+ links=re.findall(r'href=[\'\"]([^\'\"]+\.(?:mp4|webm|mkv)(?:\?[^\'\"]*)?)[\'\"]',text,re.I)
+ if not links:
+  links=re.findall(r'https?[^\"\'<> ]+\.(?:mp4|webm|mkv)(?:\?[^\"\'<> ]*)?',text,re.I)
+ if not links:raise RuntimeError("Library source ထဲမှာ downloadable video file မတွေ့ပါ။")
+ return urljoin(page,links[0])
 def library():
  p=Path("public_domain_movies.json")
  if not p.exists():return []
@@ -75,27 +87,30 @@ def kind(u):
  u=u.lower()
  if "youtube.com" in u or "youtu.be" in u:return "youtube"
  if re.search(r"\.(mp4|mkv|mov|webm|avi)(?:\?|#|$)",u):return "direct"
- return "unknown"
-st.title("🎬 Movie Recap AI");st.caption("🔗 Link တစ်ခုထည့်ရုံနဲ့ International Movie → မြန်မာ Recap → မြန်မာအသံ → Subtitle → MP4")
+ return "page"
+st.title("🎬 Movie Recap AI");st.caption("Video ရှိရင် Upload • မရှိရင် Link • Library ကနေရွေး → မြန်မာ Recap MP4")
 with st.sidebar:
  vertical=st.selectbox("📱 Video Format",["9:16","16:9"])=="9:16";voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES));st.info("🎯 Target: ဇာတ်လမ်းတစ်ကားလုံးကို ~10 မိနစ်အတွင်း အကျဉ်းချုပ်")
-movies=library();url=""
+movies=library();choice="— မရွေးသေး —"
 if movies:
  st.subheader("🎞️ Public-domain Movie Library");names=[m["title"] for m in movies];choice=st.selectbox("Movie ရွေးပါ",["— မရွေးသေး —"]+names)
- if choice!="— မရွေးသေး —":url=next(m["url"] for m in movies if m["title"]==choice)
-url=st.text_input("🔗 Movie Video Link",value=url,placeholder="Direct MP4 link ထည့်ပါ")
-if url:
- k=kind(url)
- if k=="youtube":st.warning("⚠️ YouTube link ကို video file အဖြစ် အလိုအလျောက်ယူသုံးခွင့် အတည်မပြုနိုင်ပါ။ Public-domain/direct-video link ကိုသုံးပါ။")
- elif k=="direct":st.success("🟢 Direct video link — Generate လုပ်နိုင်ပါတယ်။")
- else:st.info("🔎 Link ကို Generate လုပ်ချိန်မှာ video file ဟုတ်မဟုတ် စစ်ပါမယ်။")
+up=st.file_uploader("🎞️ Movie Video (max 1 GB)",type=["mp4","mkv","mov","avi","webm"]);url=st.text_input("🔗 Movie Video Link",placeholder="Direct MP4 link ထည့်ပါ")
 if st.button("🚀 Generate Myanmar Movie Recap",type="primary",use_container_width=True):
- if not url.strip():st.error("❌ Movie Link အရင်ထည့်ပါ။");st.stop()
- if kind(url)=="youtube":st.error("❌ ဤဗီဒီယိုကို Movie Scene ပါတဲ့ MP4 အဖြစ် ယူသုံးခွင့် အတည်မပြုနိုင်ပါ။ Public-domain/direct-video link ကိုထည့်ပါ။");st.stop()
+ if not up and not url.strip() and choice=="— မရွေးသေး —":st.error("❌ Video Upload လုပ်ပါ၊ Link ထည့်ပါ၊ ဒါမှမဟုတ် Library ကနေ Movie ရွေးပါ။");st.stop()
  try:
   with tempfile.TemporaryDirectory() as td:
    td=Path(td);video=td/"movie.mp4";audio=td/"audio.wav";vf=td/"voice.mp3";sub=td/"mm.srt";out=td/"movie_recap_mm.mp4"
-   with st.spinner("📥 Link ကနေ Movie ယူနေပါတယ်..."):download_direct(url,video)
+   if up:
+    if up.size>MAX_MB*1024*1024:raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
+    with st.spinner("📥 Uploaded movie ကိုဖတ်နေပါတယ်..."):video.write_bytes(up.getbuffer())
+   else:
+    source=url.strip()
+    if not source and choice!="— မရွေးသေး —":
+     movie=next(m for m in movies if m["title"]==choice);source=movie.get("file_url") or movie.get("source_page") or movie.get("url","")
+    if kind(source)=="youtube":raise RuntimeError("YouTube video ကို download restriction ကျော်ပြီး မယူနိုင်ပါ။ Download ခွင့်ရှိတဲ့ direct video link သို့မဟုတ် ကိုယ်ပိုင် video ကိုသုံးပါ။")
+    with st.spinner("🔗 Video source ကိုစစ်နေပါတယ်..."):
+     if kind(source)=="direct":download_direct(source,video)
+     else:download_direct(archive_file_url(source),video)
    with st.spinner("🎧 Movie တစ်ကားလုံးကို နားထောင်နေပါတယ်..."):
     cmd(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio)]);text=transcribe(audio)
    if not text.strip():raise RuntimeError("Movie dialogue မတွေ့ပါ။")
