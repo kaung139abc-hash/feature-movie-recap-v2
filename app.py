@@ -22,6 +22,22 @@ def chunks(text,n=240):
   while len(p)>n:out.append(p[:n]);p=p[n:]
   if p:out.append(p)
  return out
+def translation_chunks(text,n=3500):
+ words=(text or "").split();out=[];cur=""
+ for w in words:
+  if cur and len(cur)+len(w)+1>n:out.append(cur);cur=w
+  else:cur+=(" " if cur else "")+w
+ if cur:out.append(cur)
+ return out
+def to_myanmar(text):
+ if not text.strip():return text
+ burmese=sum(1 for c in text if '\u1000'<=c<='\u109f');letters=sum(1 for c in text if c.isalpha())
+ if letters and burmese/max(1,letters)>0.35:return text
+ try:
+  from deep_translator import GoogleTranslator
+  tr=GoogleTranslator(source="auto",target="my")
+  return " ".join(x for x in (tr.translate(p) for p in translation_chunks(text)) if x)
+ except Exception as e:raise RuntimeError("မြန်မာဘာသာပြန် service မရနိုင်သေးပါ။ Internet connection ကိုစစ်ပြီး ပြန်စမ်းပါ။") from e
 def recap(text):
  s=chunks(text,240)
  if len(s)<=240:return " ".join(s)
@@ -47,7 +63,7 @@ def youtube_transcript(url):
  m=re.search(r"(?:v=|youtu\.be/|shorts/|live/)([A-Za-z0-9_-]{11})",url)
  if not m:raise ValueError("YouTube URL မမှန်ပါ။")
  api=YouTubeTranscriptApi();vid=m.group(1)
- try:tr=api.fetch(vid,languages=["my","en","th","lo"])
+ try:tr=api.fetch(vid,languages=["my","en","hi","ta","te","ml","th","lo"])
  except Exception:
   try:tr=api.fetch(vid)
   except Exception as e:raise RuntimeError("ဒီ YouTube video မှာ အသုံးပြုလို့ရတဲ့ transcript/captions မတွေ့ပါ။") from e
@@ -70,7 +86,7 @@ def public_movies():
  if not p.exists():return []
  try:return json.loads(p.read_text(encoding="utf-8"))
  except:return []
-st.title("🎬 Movie Recap AI");st.caption("Public-domain movie library + Movie upload → Burmese recap → Burmese voice → Subtitle → MP4")
+st.title("🎬 Movie Recap AI");st.caption("International movies → Myanmar recap → Myanmar voice → Myanmar subtitles → MP4")
 with st.sidebar:
  vertical=st.selectbox("📱 Format",["9:16","16:9"])=="9:16";voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES));st.info("Recap length is automatic");st.caption("Use content you own, have permission to transform, or public-domain content.")
 movies=public_movies()
@@ -90,7 +106,8 @@ if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
     with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
    elif url and re.search(r"(?:youtube\.com|youtu\.be)",url,re.I):
     with st.spinner("🔗 Reading YouTube transcript..."):text=youtube_transcript(url)
-    raise RuntimeError("YouTube transcript ကို recap လုပ်နိုင်ပေမယ့် movie scene/video ကို YouTube မှာ အလိုအလျောက် download မလုပ်ပါ။ Video Scene ပါတဲ့ MP4 အတွက် public-domain movie ကို library မှာရွေးပါ သို့မဟုတ် ကိုယ်ပိုင် video upload လုပ်ပါ။")
+    text=to_myanmar(text)
+    raise RuntimeError("YouTube transcript ကို မြန်မာ recap အဖြစ်ပြောင်းနိုင်ပေမယ့် movie scene/video ကို YouTube မှာ အလိုအလျောက် download မလုပ်ပါ။ Video Scene ပါတဲ့ MP4 အတွက် public-domain movie ကို library မှာရွေးပါ သို့မဟုတ် ကိုယ်ပိုင် video upload လုပ်ပါ။")
    elif url:
     with st.spinner("🔗 Downloading direct video..."):direct_download(url,src)
     with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
@@ -99,9 +116,10 @@ if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
     with st.spinner("🔗 Opening public-domain movie source..."):direct_download(movie["url"],src)
     with st.spinner("🎧 Reading movie dialogue..."):cmd(["-y","-i",str(src),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)]);text=transcribe(wav)
    if not text.strip():raise ValueError("အသံ/Transcript မတွေ့ပါ။")
-   script=recap(text);st.text_area("✍️ Recap",script,height=260)
+   with st.spinner("🌐 Translating international dialogue to Myanmar..."):my_text=to_myanmar(text)
+   script=recap(my_text);st.text_area("✍️ Myanmar Recap",script,height=260)
    with st.spinner("🎙️ Creating Myanmar voice..."):tts(script,VOICES[voice],vo)
    d=duration(vo);make_srt(script,d,sub)
    with st.spinner("🎬 Rendering MP4 with movie scenes..."):render(src,vo,sub,out,vertical)
-   data=out.read_bytes();st.success(f"✅ Done — {d/60:.1f} minutes");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap.mp4","video/mp4")
+   data=out.read_bytes();st.success(f"✅ Done — {d/60:.1f} minutes");st.video(data);st.download_button("⬇️ Download MP4",data,"movie_recap_mm.mp4","video/mp4")
  except Exception as e:st.error(f"❌ Error: {e}")
