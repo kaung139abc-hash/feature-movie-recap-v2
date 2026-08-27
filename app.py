@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 import streamlit as st
+
 st.set_page_config(page_title="Movie Recap AI", page_icon="🎬", layout="wide")
 MAX_UPLOAD_MB=1024; MAX_RECAP_MINUTES=10
 VOICE_OPTIONS={"🇲🇲 Myanmar Male":"my-MM-ThihaNeural","🇲🇲 Myanmar Female":"my-MM-NilarNeural","🇺🇸 Young Male":"en-US-GuyNeural","🇺🇸 Young Female":"en-US-JennyNeural","🇺🇸 Cinematic Male":"en-US-EricNeural","🇺🇸 Cinematic Female":"en-US-AriaNeural"}
@@ -30,7 +31,7 @@ def transcribe(audio):
  segs,_=load_whisper().transcribe(str(audio),beam_size=1,vad_filter=True,condition_on_previous_text=False)
  return " ".join(s.text.strip() for s in segs if s.text.strip())
 def sentence_chunks(text,max_chars=180):
- pieces=re.split(r"(?<=[.!?။!?])\s+|(?<=၊)\s+",text.strip()); out=[]
+ pieces=re.split(r"(?<=[.!?။!?])\s+|(?<=၊)\s+",text.strip());out=[]
  for p in (x.strip() for x in pieces if x.strip()):
   if len(p)<=max_chars:out.append(p);continue
   cur=""
@@ -56,7 +57,9 @@ def duration(path):
  if probe:
   r=subprocess.run([probe,"-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)],capture_output=True,text=True)
   if r.returncode==0:return float(r.stdout.strip())
- ff=binpath("ffmpeg");r=subprocess.run([ff,"-i",str(path)],capture_output=True,text=True);m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr)
+ ff=binpath("ffmpeg")
+ if not ff:raise RuntimeError("FFmpeg မတွေ့ပါ။")
+ r=subprocess.run([ff,"-i",str(path)],capture_output=True,text=True);m=re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",r.stderr)
  if not m:raise RuntimeError("Media duration ကိုဖတ်မရပါ။")
  return int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3))
 def make_srt(text,seconds,path):
@@ -76,15 +79,15 @@ def render(source,narration,srt,out,aspect):
  run_cmd(["ffmpeg","-y","-stream_loop","-1","-i",str(source),"-i",str(narration),"-t",f"{sec:.3f}","-vf",vf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","25","-c:a","aac","-b:a","128k","-shortest",str(out)])
 def download_youtube(url,folder):
  from yt_dlp import YoutubeDL
- # Do not request a fixed format ID; YouTube availability changes by video/account/client.
- opts={"outtmpl":str(Path(folder)/"youtube_source.%(ext)s"),"format":"bestvideo*+bestaudio/best","merge_output_format":"mp4","noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"fragment_retries":2,"socket_timeout":30}
+ # Prefer a single-file MP4 first; this avoids yt-dlp needing to merge formats.
+ opts={"outtmpl":str(Path(folder)/"youtube_source.%(ext)s"),"format":"best[ext=mp4]/best","noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"fragment_retries":2,"socket_timeout":30}
  with YoutubeDL(opts) as ydl:
-  info=ydl.extract_info(url,download=True); prepared=Path(ydl.prepare_filename(info))
+  info=ydl.extract_info(url,download=True);prepared=Path(ydl.prepare_filename(info))
  for p in [prepared,prepared.with_suffix(".mp4"),Path(folder)/"youtube_source.mp4"]:
   if p.exists() and p.stat().st_size:return p
  matches=list(Path(folder).glob("youtube_source.*"))
  if matches:return matches[0]
- raise RuntimeError("YouTube download ပြီးပေမယ့် video file မတွေ့ပါ။")
+ raise RuntimeError("YouTube video download ပြီးပေမယ့် video file မတွေ့ပါ။")
 st.title("🎬 Movie Recap AI");st.caption("Upload a video or use an authorized direct video URL.")
 with st.sidebar:
  language=st.selectbox("Recap Language",["မြန်မာဘာသာ","English"]);voice_name=st.selectbox("🎙️ Voice",list(VOICE_OPTIONS));aspect=st.selectbox("📱 Video Format",["9:16","16:9"]);st.info("Free: 5 recaps/day • Maximum output: 10 minutes");st.caption("⚠️ Use videos you own or have permission to transform/publish.")
@@ -100,15 +103,17 @@ if st.button("🚀 Generate Recap MP4",type="primary",use_container_width=True):
    else:
     if not url.startswith(("http://","https://")):raise ValueError("Valid http/https URL ထည့်ပါ။")
     if re.search(r"(?:youtube\.com/watch|youtu\.be/|youtube\.com/shorts/|youtube\.com/live/)",url,re.I):
-     with st.spinner("🔗 YouTube available format ကိုရွေးပြီး download လုပ်နေပါတယ်..."):source=download_youtube(url,td)
+     with st.spinner("🔗 Downloading a compatible YouTube format..."):source=download_youtube(url,td)
     else:
      import requests
      with st.spinner("🔗 Downloading direct video..."):
       r=requests.get(url,stream=True,timeout=60,headers={"User-Agent":"MovieRecapAI/1.0"});r.raise_for_status();total=0
       with open(source,"wb") as f:
        for chunk in r.iter_content(1024*1024):
-        if chunk:total+=len(chunk);f.write(chunk)
-        if total>MAX_UPLOAD_MB*1024*1024:raise ValueError("Video link က 1 GB ထက်ကျော်နေပါတယ်။")
+        if chunk:
+         total+=len(chunk)
+         if total>MAX_UPLOAD_MB*1024*1024:raise ValueError("Video link က 1 GB ထက်ကျော်နေပါတယ်။")
+         f.write(chunk)
    if not source.exists() or not source.stat().st_size:raise ValueError("Video file မရပါ။")
    with st.spinner("🎧 Extracting audio..."):extract_audio(source,audio)
    with st.spinner("🗣️ Transcribing with low-memory Whisper..."):transcript=transcribe(audio)
