@@ -1,5 +1,5 @@
-streamlit>=1.40
-transformers>=4.45
+streamlit>=1.40,<1.63
+transformers>=4.45,<5
 accelerate>=0.34
 torch
 torchaudio
