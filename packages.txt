@@ -1,3 +1,6 @@
 ffmpeg
 fonts-noto-core
 fonts-noto-extra
+fonts-noto-cjk
+libass9
+libass-dev
