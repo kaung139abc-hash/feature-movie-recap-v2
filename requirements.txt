@@ -7,3 +7,4 @@ sentencepiece
 ffmpeg-python
 edge-tts>=6.1
 safetensors
+requests>=2.32
