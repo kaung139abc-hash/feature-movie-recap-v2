@@ -2,3 +2,4 @@ streamlit>=1.40,<1.63
 faster-whisper>=1.1,<2
 edge-tts>=6.1
 requests>=2.32
+imageio-ffmpeg>=0.6
