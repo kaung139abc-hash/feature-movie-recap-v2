@@ -63,8 +63,9 @@ def render(v,a,s,o,vertical):
  cmd(["-y","-stream_loop","-1","-i",str(v),"-i",str(a),"-t",f"{sec:.2f}","-vf",vf,"-map","0:v:0","-map","1:a:0","-c:v","libx264","-preset","veryfast","-crf","27","-c:a","aac","-b:a","128k","-shortest",str(o)])
 def download_direct(url,o):
  import requests
- r=requests.get(url,stream=True,timeout=60,headers={"User-Agent":"MovieRecapAI/1.0"});r.raise_for_status();n=0;ctype=r.headers.get("content-type","").lower()
- if "text/html" in ctype:raise RuntimeError("ဒီ link က video file မဟုတ်ဘဲ webpage ဖြစ်ပါတယ်။ Direct MP4/WebM link ထည့်ပါ။")
+ r=requests.get(url,stream=True,timeout=90,headers={"User-Agent":"Mozilla/5.0 MovieRecapAI"},allow_redirects=True);r.raise_for_status();n=0;ctype=r.headers.get("content-type","").lower()
+ if "text/html" in ctype:
+  raise RuntimeError("ဒီ Link က webpage ဖြစ်ပါတယ်။ Download လုပ်လို့ရတဲ့ direct video link (MP4/WebM/MOV/MKV/AVI) ထည့်ပါ။")
  with open(o,"wb") as f:
   for b in r.iter_content(1024*1024):
    if not b:continue
@@ -72,13 +73,14 @@ def download_direct(url,o):
    if n>MAX_MB*1024*1024:raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
    f.write(b)
 def is_youtube(u):return "youtube.com" in u.lower() or "youtu.be" in u.lower()
-st.title("🎬 Movie Recap AI");st.caption("Video ရှိရင် Upload • မရှိရင် Link → မြန်မာ Movie Recap MP4")
+st.title("🎬 Movie Recap AI")
+st.caption("🎞️ Video ရှိရင် Upload • 🔗 မရှိရင် Download လုပ်လို့ရတဲ့ Video Link → 🇲🇲 Recap MP4")
 with st.sidebar:
  vertical=st.selectbox("📱 Video Format",["9:16","16:9"])=="9:16"
  voice=st.selectbox("🎙️ Myanmar Voice",list(VOICES))
  st.info("🎯 Target: ဇာတ်လမ်းတစ်ကားလုံးကို ~10 မိနစ်အတွင်း အကျဉ်းချုပ်")
 up=st.file_uploader("🎞️ Movie Video (max 1 GB)",type=["mp4","mkv","mov","avi","webm"])
-url=st.text_input("🔗 Movie Video Link",placeholder="Direct MP4 / WebM link ထည့်ပါ")
+url=st.text_input("🔗 Movie Video Link",placeholder="https://.../movie.mp4")
 if st.button("🚀 Generate Myanmar Movie Recap",type="primary",use_container_width=True):
  if not up and not url.strip():st.error("❌ Video Upload လုပ်ပါ သို့မဟုတ် Video Link ထည့်ပါ။");st.stop()
  try:
@@ -89,7 +91,7 @@ if st.button("🚀 Generate Myanmar Movie Recap",type="primary",use_container_wi
     with st.spinner("📥 Uploaded movie ကိုဖတ်နေပါတယ်..."):video.write_bytes(up.getbuffer())
    else:
     source=url.strip()
-    if is_youtube(source):raise RuntimeError("YouTube link ကို download restriction ကျော်ပြီး မယူနိုင်ပါ။ Download ခွင့်ရှိတဲ့ direct video link သို့မဟုတ် ကိုယ်ပိုင် video ကိုသုံးပါ။")
+    if is_youtube(source):raise RuntimeError("ဒီ YouTube URL ကို app က video file အဖြစ် တိုက်ရိုက်မရယူနိုင်ပါ။ Download လုပ်ခွင့်ရှိတဲ့ direct video link သို့မဟုတ် ကိုယ်ပိုင် video ကိုသုံးပါ။")
     with st.spinner("🔗 Video link ကနေ download လုပ်နေပါတယ်..."):download_direct(source,video)
    with st.spinner("🎧 Movie တစ်ကားလုံးကို နားထောင်နေပါတယ်..."):
     cmd(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio)])
