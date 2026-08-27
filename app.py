@@ -8,6 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Movie Recap AI", page_icon="🎬", layout="wide")
 
+MAX_UPLOAD_MB = 1024
 MAX_RECAP_MINUTES = 10
 FREE_DAILY_LIMIT = 5
 PREMIUM_DAILY_LIMIT = 20
@@ -48,7 +49,8 @@ def sentence_chunks(text, max_chars=180):
     pieces = [p.strip() for p in pieces if p.strip()]
     out = []
     for piece in pieces:
-        if len(piece) <= max_chars: out.append(piece); continue
+        if len(piece) <= max_chars:
+            out.append(piece); continue
         words = piece.split(); cur = ""
         for word in words:
             if cur and len(cur) + len(word) + 1 > max_chars:
@@ -90,7 +92,8 @@ def generate_recap(transcript, language):
         ]
         prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = tokenizer(prompt, return_tensors="pt")
-        if torch.cuda.is_available(): inputs = {k: v.to("cuda") for k, v in inputs.items()}
+        if torch.cuda.is_available():
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
         output = model.generate(**inputs, max_new_tokens=500, do_sample=False, repetition_penalty=1.08)
         generated = output[0][inputs["input_ids"].shape[1]:]
         notes.append(tokenizer.decode(generated, skip_special_tokens=True).strip())
@@ -99,7 +102,8 @@ def generate_recap(transcript, language):
 
 def make_srt(text, duration_seconds, srt_path):
     units = sentence_chunks(text)
-    if not units: raise ValueError("Recap script မှာ subtitle ပြုလုပ်စရာစာသားမရှိပါ။")
+    if not units:
+        raise ValueError("Recap script မှာ subtitle ပြုလုပ်စရာစာသားမရှိပါ။")
     weights = [max(1, len(u.replace(" ", ""))) for u in units]
     total = sum(weights); current = 0.0; lines = []
     def stamp(seconds):
@@ -108,25 +112,29 @@ def make_srt(text, duration_seconds, srt_path):
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
     for i, unit in enumerate(units, 1):
         end = duration_seconds if i == len(units) else current + duration_seconds * weights[i - 1] / total
-        lines.append(f"{i}\n{stamp(current)} --> {stamp(end)}\n{unit}\n"); current = end
+        lines.append(f"{i}\n{stamp(current)} --> {stamp(end)}\n{unit}\n")
+        current = end
     srt_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def tts_to_mp3(text, voice, output):
     import edge_tts
-    async def convert(): await edge_tts.Communicate(text, voice).save(str(output))
+    async def convert():
+        await edge_tts.Communicate(text, voice).save(str(output))
     asyncio.run(convert())
 
 
 def audio_duration(path):
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], capture_output=True, text=True)
-    if result.returncode != 0: raise RuntimeError(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
     return float(result.stdout.strip())
 
 
 def render_video(source_video, narration_audio, srt_path, output_path, aspect):
     duration = audio_duration(narration_audio)
-    if duration > MAX_RECAP_MINUTES * 60 + 2: raise ValueError("Recap အသံက 10 မိနစ်ကျော်နေပါတယ်။")
+    if duration > MAX_RECAP_MINUTES * 60 + 2:
+        raise ValueError("Recap အသံက 10 မိနစ်ကျော်နေပါတယ်။")
     vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if aspect == "9:16" else "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080"
     subtitle_file = str(srt_path).replace("\\", "/").replace(":", "\\:")
     vf += f",subtitles='{subtitle_file}':force_style='FontName=Noto Sans Myanmar,FontSize=28,Outline=2,Shadow=1,Alignment=2,MarginV=55'"
@@ -147,36 +155,56 @@ with st.sidebar:
 st.title("🎬 Movie Recap AI")
 st.caption("Upload a video or provide an authorized direct video URL.")
 
-video = st.file_uploader("🎞️ Movie Video ထည့်ပါ", type=["mp4", "mkv", "mov", "avi", "webm"])
+video = st.file_uploader("🎞️ Movie Video ထည့်ပါ (အများဆုံး 1 GB)", type=["mp4", "mkv", "mov", "avi", "webm"])
 url = st.text_input("🔗 Authorized direct video URL", placeholder="https://example.com/video.mp4")
 
+if video and video.size > MAX_UPLOAD_MB * 1024 * 1024:
+    st.error("❌ Video file က 1 GB ထက်ကြီးနေပါတယ်။ 1 GB အောက် file သုံးပါ။")
+    video = None
+
 if video or url:
-    if video: st.video(video)
+    if video:
+        st.video(video)
     if st.button("🚀 Generate Full Recap MP4", type="primary", use_container_width=True):
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp); source = tmp / "movie.mp4"; audio = tmp / "movie.wav"; narration = tmp / "narration.mp3"; srt = tmp / "subtitles.srt"; output = tmp / "movie_recap.mp4"
+                tmp = Path(tmp)
+                source = tmp / "movie.mp4"; audio = tmp / "movie.wav"; narration = tmp / "narration.mp3"; srt = tmp / "subtitles.srt"; output = tmp / "movie_recap.mp4"
                 if video:
                     source.write_bytes(video.getbuffer())
                 else:
                     import requests
-                    if not url.lower().startswith(("http://", "https://")): raise ValueError("Valid http/https video URL ထည့်ပါ။")
+                    if not url.lower().startswith(("http://", "https://")):
+                        raise ValueError("Valid http/https video URL ထည့်ပါ။")
                     with st.spinner("🔗 Video link ကို fetch လုပ်နေပါတယ်..."):
                         r = requests.get(url, stream=True, timeout=60, headers={"User-Agent": "MovieRecapAI/1.0"}); r.raise_for_status()
+                        total = 0
                         with open(source, "wb") as f:
                             for chunk in r.iter_content(1024 * 1024):
-                                if chunk: f.write(chunk)
-                with st.spinner("🎧 Audio extracting..."): extract_audio(source, audio)
-                with st.spinner("🗣️ Movie dialogue ကို transcript ပြောင်းနေပါတယ်..."): transcript = load_whisper()(str(audio))["text"].strip()
-                if not transcript: st.error("❌ Speech/dialogue မတွေ့ပါ။"); st.stop()
-                with st.expander("📜 Transcript", expanded=False): st.text_area("Movie transcript", transcript, height=220)
+                                if chunk:
+                                    total += len(chunk)
+                                    if total > MAX_UPLOAD_MB * 1024 * 1024:
+                                        raise ValueError("Video link က 1 GB ထက်ကျော်နေပါတယ်။")
+                                    f.write(chunk)
+                with st.spinner("🎧 Audio extracting..."):
+                    extract_audio(source, audio)
+                with st.spinner("🗣️ Movie dialogue ကို transcript ပြောင်းနေပါတယ်..."):
+                    transcript = load_whisper()(str(audio))["text"].strip()
+                if not transcript:
+                    st.error("❌ Speech/dialogue မတွေ့ပါ။"); st.stop()
+                with st.expander("📜 Transcript", expanded=False):
+                    st.text_area("Movie transcript", transcript, height=220)
                 st.subheader("✍️ AI Recap Script")
-                recap = generate_recap(transcript, language); st.text_area("Recap", recap, height=320)
-                with st.spinner("🎙️ AI narration အသံထုတ်နေပါတယ်..."): tts_to_mp3(recap, VOICE_OPTIONS[voice_name], narration)
+                recap = generate_recap(transcript, language)
+                st.text_area("Recap", recap, height=320)
+                with st.spinner("🎙️ AI narration အသံထုတ်နေပါတယ်..."):
+                    tts_to_mp3(recap, VOICE_OPTIONS[voice_name], narration)
                 duration = audio_duration(narration)
-                if duration > MAX_RECAP_MINUTES * 60: st.error("❌ Narration က 10 မိနစ်ကျော်သွားပါတယ်။"); st.stop()
+                if duration > MAX_RECAP_MINUTES * 60:
+                    st.error("❌ Narration က 10 မိနစ်ကျော်သွားပါတယ်။"); st.stop()
                 make_srt(recap, duration, srt)
-                with st.spinner("🎞️ Subtitle + narration + video ကို MP4 render လုပ်နေပါတယ်..."): render_video(source, narration, srt, output, aspect)
+                with st.spinner("🎞️ Subtitle + narration + video ကို MP4 render လုပ်နေပါတယ်..."):
+                    render_video(source, narration, srt, output, aspect)
                 st.success(f"✅ Recap MP4 ပြီးပါပြီ — {duration / 60:.1f} minutes")
                 st.video(str(output))
                 st.download_button("⬇️ Download MP4", output.read_bytes(), "movie_recap.mp4", "video/mp4")
