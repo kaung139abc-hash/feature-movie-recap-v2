@@ -8,8 +8,6 @@ import streamlit as st
 
 st.set_page_config(page_title="Movie Recap AI", page_icon="🎬", layout="wide")
 
-APP_DIR = Path("movie_recap_data")
-APP_DIR.mkdir(exist_ok=True)
 MAX_RECAP_MINUTES = 10
 FREE_DAILY_LIMIT = 5
 PREMIUM_DAILY_LIMIT = 20
@@ -31,7 +29,10 @@ def run_cmd(cmd):
 
 
 def extract_audio(video_path, audio_path):
-    run_cmd(["ffmpeg", "-y", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)])
+    run_cmd([
+        "ffmpeg", "-y", "-i", str(video_path), "-vn",
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)
+    ])
 
 
 def split_text(text, limit=2200):
@@ -49,7 +50,6 @@ def split_text(text, limit=2200):
 
 
 def sentence_chunks(text, max_chars=180):
-    # Keep punctuation-based units for subtitle timing.
     pieces = re.split(r"(?<=[.!?။!?])\s+|(?<=၊)\s+", text.strip())
     pieces = [p.strip() for p in pieces if p.strip()]
     out = []
@@ -85,7 +85,6 @@ def load_whisper():
 @st.cache_resource
 
 def load_recap_model():
-    # Multilingual instruction model: supports Burmese better than an English-only summarizer.
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import torch
 
@@ -99,6 +98,8 @@ def load_recap_model():
 
 
 def generate_recap(transcript, language):
+    import torch
+
     tokenizer, model = load_recap_model()
     parts = split_text(transcript)
     notes = []
@@ -106,7 +107,7 @@ def generate_recap(transcript, language):
     for i, part in enumerate(parts):
         st.write(f"🧠 Story analysis {i + 1}/{len(parts)}...")
         prompt = f"""You are a professional movie recap writer.
-Analyze the following movie transcript and preserve the important plot events, characters, motivations, conflict, twists and ending. Do not invent events.
+Analyze the following movie transcript and preserve important plot events, characters, motivations, conflict, twists and ending. Do not invent events.
 Write a concise narration-ready recap in {language}. Use natural spoken language and clear chronological order.
 Transcript:
 {part}"""
@@ -123,7 +124,6 @@ Transcript:
         notes.append(tokenizer.decode(generated, skip_special_tokens=True).strip())
 
     combined = "\n\n".join(notes)
-    # Final editorial pass to keep the narration within the 10-minute target.
     target_words = 1250
     if len(combined.split()) > target_words:
         messages = [
@@ -146,7 +146,6 @@ def make_srt(text, duration_seconds, srt_path):
     if not units:
         raise ValueError("Recap script မှာ subtitle ပြုလုပ်စရာစာသားမရှိပါ။")
 
-    # Proportional timing gives every spoken unit a stable subtitle window.
     weights = [max(1, len(u.replace(" ", ""))) for u in units]
     total = sum(weights)
     current = 0.0
@@ -169,13 +168,18 @@ def make_srt(text, duration_seconds, srt_path):
 
 def tts_to_mp3(text, voice, output):
     import edge_tts
+
     async def convert():
         await edge_tts.Communicate(text, voice).save(str(output))
+
     asyncio.run(convert())
 
 
 def audio_duration(path):
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], capture_output=True, text=True)
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path)
+    ], capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr)
     return float(result.stdout.strip())
@@ -191,14 +195,20 @@ def render_video(source_video, narration_audio, srt_path, output_path, aspect):
     else:
         vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080"
 
-    # The source movie is used only as a visual background; its original audio is removed.
-    # Users should only process videos they own or have permission to transform.
-    cmd = [
-        "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source_video), "-i", str(narration_audio),
-        "-t", f"{duration:.3f}", "-vf", f"{vf},subtitles={str(srt_path).replace(':', '\\:')}:force_style='FontName=Noto Sans Myanmar,FontSize=28,Outline=2,Shadow=1,Alignment=2,MarginV=55'",
-        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-shortest", str(output_path)
-    ]
-    run_cmd(cmd)
+    subtitle_file = str(srt_path).replace("\\", "/").replace(":", "\\:")
+    subtitle_filter = (
+        f"{vf},subtitles='{subtitle_file}':"
+        "force_style='FontName=Noto Sans Myanmar,FontSize=28,Outline=2,Shadow=1,Alignment=2,MarginV=55'"
+    )
+
+    run_cmd([
+        "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source_video),
+        "-i", str(narration_audio), "-t", f"{duration:.3f}",
+        "-vf", subtitle_filter,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "160k", "-shortest", str(output_path)
+    ])
 
 
 with st.sidebar:
@@ -206,10 +216,11 @@ with st.sidebar:
     language = st.selectbox("Recap Language", ["မြန်မာဘာသာ", "English"])
     voice_name = st.selectbox("🎙️ Voice", list(VOICE_OPTIONS.keys()))
     aspect = st.selectbox("📱 Video Format", ["9:16", "16:9"])
-    plan = st.radio("Plan", ["Free", "Premium"])
+    plan = st.radio("Plan (prototype)", ["Free", "Premium"])
     limit = FREE_DAILY_LIMIT if plan == "Free" else PREMIUM_DAILY_LIMIT
     st.info(f"{plan}: {limit} recaps/day\nMaximum output: {MAX_RECAP_MINUTES} minutes")
-    st.caption("⚠️ Upload only movies/videos you own or are authorized to transform and publish.")
+    st.caption("Quota/payment is not connected yet. This UI is ready for the production auth + billing layer.")
+    st.caption("⚠️ Process and publish only videos you own or have permission to transform.")
 
 video = st.file_uploader("🎞️ Movie Video ထည့်ပါ", type=["mp4", "mkv", "mov", "avi", "webm"])
 
@@ -234,6 +245,9 @@ if video:
                 if not transcript:
                     st.error("❌ Speech/dialogue မတွေ့ပါ။")
                     st.stop()
+
+                with st.expander("📜 Transcript", expanded=False):
+                    st.text_area("Movie transcript", transcript, height=220)
 
                 st.subheader("✍️ AI Recap Script")
                 recap = generate_recap(transcript, language)
@@ -260,6 +274,5 @@ if video:
 
         except Exception as exc:
             st.error(f"❌ Error: {exc}")
-            st.exception(exc)
 else:
     st.info("Movie video တစ်ခု upload လုပ်ပြီး Generate Full Recap MP4 ကိုနှိပ်ပါ။")
