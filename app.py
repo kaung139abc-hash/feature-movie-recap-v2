@@ -47,8 +47,7 @@ def generate_recap(transcript,language):
  target=min(45,max(8,len(s)))
  if len(s)>target:
   ids=sorted(set(round(i*(len(s)-1)/(target-1)) for i in range(target)));s=[s[i] for i in ids]
- prefix="ဇာတ်လမ်းကို အစမှအဆုံး အဓိကဖြစ်ရပ်များအတိုင်း ပြောပြပါမယ်။ " if language=="မြန်မာဘာသာ" else "Here is the story in chronological order. "
- return prefix+" ".join(s)
+ return " ".join(s)
 def tts(text,voice,out):
  import edge_tts
  async def go():await edge_tts.Communicate(text,voice).save(str(out))
@@ -81,7 +80,6 @@ def render(source,narration,srt,out,aspect):
 def download_youtube(url,folder):
  from yt_dlp import YoutubeDL
  ff=binpath("ffmpeg")
- # Try a single-file MP4 first; if unavailable, use best video+audio and explicitly tell yt-dlp where bundled FFmpeg is.
  common={"outtmpl":str(Path(folder)/"youtube_source.%(ext)s"),"noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"fragment_retries":2,"socket_timeout":30}
  attempts=[{"format":"best[ext=mp4]/best"},{"format":"bestvideo+bestaudio/best","merge_output_format":"mp4","ffmpeg_location":ff}]
  last=None
