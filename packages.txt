@@ -4,3 +4,5 @@ fonts-noto-extra
 fonts-noto-cjk
 libass9
 libass-dev
+nodejs
+npm
