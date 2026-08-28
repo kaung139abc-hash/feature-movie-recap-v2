@@ -40,47 +40,100 @@ def duration(path):
 
 
 def download_video(url, out):
+    """Universal public-video downloader using yt-dlp first, direct-file fallback second.
+    It never requires a site-specific downloader and always passes the real FFmpeg executable
+    to yt-dlp, so adaptive video+audio streams can be merged when the source requires it.
+    """
     import yt_dlp
+
+    url = (url or "").strip()
+    if not re.match(r"^https?://", url, re.I):
+        raise RuntimeError("HTTP/HTTPS video link ထည့်ပါ။")
+
     ff = ffmpeg_exe()
     stem = out.with_suffix("")
     errors = []
-    # First try a progressive stream: no video/audio merge is needed.
+
+    # Prefer one-file streams first. This avoids unnecessary merging on sites that expose
+    # progressive MP4/WebM. Then fall back to adaptive streams, which are merged with FFmpeg.
     formats = [
-        "best[ext=mp4][vcodec!=none][acodec!=none]",
-        "best[vcodec!=none][acodec!=none]",
-        "best[ext=mp4]",
-        "best",
+        "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
+        "best[ext=mp4]/best",
         "bv*+ba/b",
     ]
+
+    common = {
+        "outtmpl": str(stem) + ".%(ext)s",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "file_access_retries": 3,
+        "socket_timeout": 30,
+        "concurrent_fragment_downloads": 1,
+        "ffmpeg_location": ff,
+        "merge_output_format": "mp4",
+        "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"},
+    }
+
     for fmt in formats:
         try:
-            opts = {
-                "format": fmt,
-                "outtmpl": str(stem) + ".%(ext)s",
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "retries": 4,
-                "fragment_retries": 4,
-                "socket_timeout": 30,
-                "concurrent_fragment_downloads": 1,
-                "merge_output_format": "mp4",
-                "ffmpeg_location": ff,
-            }
+            opts = dict(common)
+            opts["format"] = fmt
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 prepared = Path(ydl.prepare_filename(info))
-            candidates = [prepared, prepared.with_suffix(".mp4"), stem.with_suffix(".mp4"), stem.with_suffix(".webm"), stem.with_suffix(".mkv"), out]
-            found = next((p for p in candidates if p.exists() and p.stat().st_size), None)
+
+            candidates = [
+                out,
+                prepared,
+                prepared.with_suffix(".mp4"),
+                prepared.with_suffix(".mkv"),
+                prepared.with_suffix(".webm"),
+                stem.with_suffix(".mp4"),
+                stem.with_suffix(".mkv"),
+                stem.with_suffix(".webm"),
+            ]
+            found = next((p for p in candidates if p.exists() and p.stat().st_size > 0), None)
             if found:
                 if found != out:
-                    if out.exists(): out.unlink()
+                    if out.exists():
+                        out.unlink()
                     found.replace(out)
                 break
         except Exception as e:
             errors.append(str(e))
+
+    # Direct media URL fallback for CDN/file-host links that yt-dlp does not have an extractor for.
     if not out.exists() or out.stat().st_size == 0:
-        raise RuntimeError("Video ကို download မလုပ်နိုင်ပါ။\n" + (errors[-1] if errors else "Unknown yt-dlp error"))
+        try:
+            response = requests.get(
+                url,
+                stream=True,
+                timeout=90,
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 MovieRecapAI"},
+            )
+            response.raise_for_status()
+            content_type = (response.headers.get("content-type") or "").lower()
+            if "text/html" in content_type or "application/json" in content_type:
+                raise RuntimeError("ဒီ URL က direct media file မဟုတ်ဘဲ webpage ဖြစ်ပါတယ်။")
+            total = 0
+            with out.open("wb") as handle:
+                for block in response.iter_content(1024 * 1024):
+                    if not block:
+                        continue
+                    total += len(block)
+                    if total > MAX_BYTES:
+                        raise RuntimeError("Video က 1GB ကျော်နေပါတယ်။")
+                    handle.write(block)
+        except Exception as e:
+            last = errors[-1] if errors else str(e)
+            raise RuntimeError(f"Video ကို ရယူမရပါ။ Link က public/accessible ဖြစ်ပြီး yt-dlp က support လုပ်ရပါမယ်။\n{last}") from e
+
+    if not out.exists() or out.stat().st_size == 0:
+        raise RuntimeError("Video file မရပါ။")
     if out.stat().st_size > MAX_BYTES:
         out.unlink(missing_ok=True)
         raise RuntimeError("Video က 1GB ကျော်နေပါတယ်။")
@@ -130,7 +183,6 @@ def recap_text(text):
     parts = split_text(text, 220)
     if not parts:
         return ""
-    # Keep the whole story for shorter videos; sample evenly for long transcripts.
     target = min(150, len(parts))
     if len(parts) <= target:
         return " ".join(parts)
@@ -218,7 +270,7 @@ with st.sidebar:
     vertical = st.selectbox("📱 Video Format", ["9:16", "16:9"]) == "9:16"
     voice = st.selectbox("🎙️ Myanmar Voice", list(VOICES))
 
-url = st.text_input("🔗 Movie / Video Link", placeholder="YouTube or another yt-dlp supported public video page")
+url = st.text_input("🔗 Movie / Video Link", placeholder="YouTube / TikTok / public video page / direct video URL")
 upload = st.file_uploader("🎞️ Video Upload (max 1GB)", type=["mp4", "mkv", "mov", "avi", "webm"])
 
 if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_width=True):
@@ -243,6 +295,8 @@ if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_
                 raise RuntimeError("Video ထဲက speech မရပါ။")
             with st.spinner("🇲🇲 မြန်မာလို recap လုပ်နေပါတယ်..."):
                 script = recap_text(translate_mm(original))
+            if not script:
+                raise RuntimeError("Recap စာသားမရပါ။")
             with st.spinner("🎙️ Myanmar voice ထုတ်နေပါတယ်..."):
                 make_tts(script, VOICES[voice], speech)
             srt(script, duration(speech), sub)
