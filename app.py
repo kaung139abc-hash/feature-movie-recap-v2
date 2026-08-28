@@ -15,6 +15,47 @@ TARGET_RECAP_CHARS = 7000
 VOICES = {"🇲🇲 Myanmar Male": "my-MM-ThihaNeural", "🇲🇲 Myanmar Female": "my-MM-NilarNeural"}
 
 
+def get_youtube_api_key():
+    for key in ("YOUTUBE_API_KEY", "YOUTUBE_DATA_API_KEY", "youtube_api_key", "youtube_data_api_key"):
+        try:
+            value = st.secrets.get(key)
+            if value:
+                return str(value).strip()
+        except Exception:
+            pass
+    return ""
+
+
+def youtube_api_metadata(url):
+    """Use the user's YouTube Data API secret for public video metadata.
+    This does not bypass authentication, bot checks, DRM, or download restrictions.
+    """
+    vid = youtube_id(url)
+    key = get_youtube_api_key()
+    if not vid or not key:
+        return None
+    r = requests.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "snippet,contentDetails,status", "id": vid, "key": key},
+        timeout=20,
+    )
+    if r.status_code != 200:
+        return None
+    items = r.json().get("items") or []
+    if not items:
+        return None
+    item = items[0]
+    snippet = item.get("snippet") or {}
+    return {
+        "id": vid,
+        "title": snippet.get("title") or "",
+        "description": snippet.get("description") or "",
+        "channel": snippet.get("channelTitle") or "",
+        "published": snippet.get("publishedAt") or "",
+        "privacy": (item.get("status") or {}).get("privacyStatus") or "",
+    }
+
+
 def ffmpeg_exe():
     exe = shutil.which("ffmpeg")
     if exe:
@@ -34,7 +75,6 @@ def ffmpeg(args, check=True, loglevel="error"):
 
 
 def duration(path):
-    """Read media duration reliably; FFmpeg's Duration line is not emitted at error log level."""
     try:
         ffprobe = shutil.which("ffprobe")
         if ffprobe:
@@ -102,8 +142,8 @@ def download_video(url, out):
     host = (urlparse(url).hostname or "").lower()
     errors = []
     formats = [
-        "best[ext=mp4][vcodec!=none][acodec!=none]",
-        "best[vcodec!=none][acodec!=none]",
+        "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
+        "best[ext=mp4]/best",
         "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
     ]
     common = {
@@ -178,7 +218,6 @@ def recap_text(text):
     parts = split_text(text)
     if not parts: return ""
     if len(text) <= TARGET_RECAP_CHARS: return " ".join(parts)
-    # Keep story order while reducing to a narration-sized script.
     ids = [round(i * (len(parts)-1) / max(1, 149)) for i in range(150)]
     return " ".join(parts[i] for i in ids)
 
@@ -239,21 +278,43 @@ if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_
     try:
         with tempfile.TemporaryDirectory(prefix="movie_recap_") as td:
             w=Path(td); video=w/"source.mp4"; wav=w/"audio.wav"; speech=w/"voice.mp3"; sub=w/"mm.srt"; out=w/"movie_recap_mm.mp4"
+            youtube_meta = None
+            if not upload and youtube_id(url.strip()):
+                youtube_meta = youtube_api_metadata(url.strip())
+                if youtube_meta:
+                    st.caption(f"▶️ YouTube: {youtube_meta['title']}")
+                    if youtube_meta.get("privacy") not in ("", "public"):
+                        raise RuntimeError("ဒီ YouTube video က public မဟုတ်ပါ။")
+                transcript = youtube_transcript(url.strip())
+            else:
+                transcript = None
             if upload:
                 if upload.size > MAX_BYTES: raise RuntimeError("Video က 1GB ကျော်နေပါတယ်။")
                 video.write_bytes(upload.getbuffer())
+            elif transcript:
+                st.info("ℹ️ YouTube transcript ရရှိပါပြီ။ Movie ကို download မလုပ်ဘဲ recap script အတွက် အသုံးပြုနေပါတယ်။")
+                # Transcript-only mode cannot truthfully provide original movie footage.
+                # Create a neutral video background so the final narration remains usable.
+                with st.spinner("🎙️ Myanmar narration အတွက် audio ပြင်နေပါတယ်..."):
+                    pass
             else:
                 with st.spinner("🔗 Video ကို ရယူနေပါတယ်..."): download_video(url.strip(), video)
-            with st.spinner("🎙️ Audio ထုတ်နေပါတယ်..."): ffmpeg(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)])
-            with st.spinner("📝 Speech-to-text လုပ်နေပါတယ်..."): original=transcribe(wav)
-            if not original: raise RuntimeError("Video ထဲက speech မရပါ။")
+            if transcript:
+                original = transcript
+            else:
+                with st.spinner("🎙️ Audio ထုတ်နေပါတယ်..."): ffmpeg(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)])
+                with st.spinner("📝 Speech-to-text လုပ်နေပါတယ်..."): original=transcribe(wav)
+            if not original: raise RuntimeError("Video/Transcript ထဲက speech မရပါ။")
             with st.spinner("🇲🇲 မြန်မာလို recap လုပ်နေပါတယ်..."): script=recap_text(translate_mm(original))
             if not script: raise RuntimeError("Recap စာသားမရပါ။")
             with st.spinner("🎙️ Myanmar voice ထုတ်နေပါတယ်..."): make_tts(script, VOICES[voice], speech)
+            if not video.exists():
+                # Transcript-only mode: narration video is generated without claiming it contains the movie footage.
+                ffmpeg(["-y","-f","lavfi","-i","color=c=black:s=1280x720:r=24","-t",f"{duration(speech):.3f}","-an",str(video)])
             make_srt(script, duration(speech), sub)
             with st.spinner("🎬 MP4 render လုပ်နေပါတယ်..."): render(video,speech,sub,out,vertical)
             if not out.exists() or out.stat().st_size==0: raise RuntimeError("Output MP4 မထွက်ပါ။")
             st.success("✅ Myanmar Movie Recap MP4 ပြီးပါပြီ!"); st.video(str(out)); st.download_button("⬇️ Download MP4",out.read_bytes(),"movie_recap_mm.mp4","video/mp4")
     except Exception as e:
         st.error(f"❌ Generate Error: {e}")
-        if not upload and url.strip(): st.warning("💡 ဒီ source က server-side download ကိုပိတ်ထားနိုင်ပါတယ်။ Video file ကို upload လုပ်ပြီး Generate ပြန်နှိပ်ရင် recap pipeline ဆက်လုပ်နိုင်ပါတယ်။")
+        if not upload and url.strip(): st.warning("💡 Source က download/stream ကို ခွင့်မပြုရင် app က bypass မလုပ်ပါ။ Authorized direct media URL သို့မဟုတ် video upload ကို အသုံးပြုပါ။")
