@@ -4,5 +4,6 @@ edge-tts>=6.1
 requests>=2.32
 imageio-ffmpeg>=0.6
 yt-dlp>=2026.1.0
+yt-dlp-ejs
 youtube-transcript-api>=1.2
 deep-translator>=1.11
