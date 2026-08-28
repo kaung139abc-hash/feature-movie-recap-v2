@@ -110,48 +110,62 @@ def render(video,audio,subtitle,output,vertical):
     run_ffmpeg(["-y","-stream_loop","-1","-i",video,"-i",audio,"-t",f"{duration:.3f}","-map","0:v:0","-map","1:a:0","-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","27","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest",output])
 
 def download_video(url,output):
-    """Use the bundled imageio-ffmpeg binary explicitly so yt-dlp can merge YouTube video/audio."""
-    first_error=None
-    try:
-        import yt_dlp
-        ffmpeg = ffmpeg_exe()
-        opts={
-            "outtmpl":str(output.with_suffix(".%(ext)s")),
-            "format":"bv*+ba/b",
-            "merge_output_format":"mp4",
-            "ffmpeg_location":str(Path(ffmpeg).parent),
-            "noplaylist":True,
-            "quiet":True,
-            "no_warnings":True,
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info=ydl.extract_info(url,download=True)
-            prepared=Path(ydl.prepare_filename(info))
-            candidates=[output,prepared,prepared.with_suffix(".mp4"),prepared.with_suffix(".mkv")]
-            for candidate in candidates:
-                if candidate.exists() and candidate.stat().st_size:
-                    if candidate!=output:
-                        if output.exists(): output.unlink()
-                        candidate.replace(output)
-                    break
-            else: raise RuntimeError("yt-dlp download ပြီးပေမယ့် output file မတွေ့ပါ။")
-    except Exception as exc:
-        first_error=exc
-    if output.exists() and output.stat().st_size:
-        if output.stat().st_size>MAX_MB*1024*1024: output.unlink(missing_ok=True); raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
-        return
-    try:
-        response=requests.get(url,stream=True,timeout=90,headers={"User-Agent":"Mozilla/5.0 MovieRecapAI"}); response.raise_for_status()
-        if "text/html" in response.headers.get("content-type","").lower():
-            raise RuntimeError(f"Direct video URL မဟုတ်ပါ။ yt-dlp error: {first_error}")
-        size=0
-        with output.open("wb") as handle:
-            for block in response.iter_content(1024*1024):
-                if not block: continue
-                size+=len(block)
-                if size>MAX_MB*1024*1024: raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
-                handle.write(block)
-    except Exception as second: raise RuntimeError(f"Video link ကို ရယူလို့မရပါ: {second}") from second
+    """Download YouTube/supported video links without requiring a yt-dlp format merge when a single-file stream exists."""
+    import yt_dlp
+    ffmpeg = ffmpeg_exe()
+    base = output.with_suffix("")
+    errors = []
+    formats = [
+        "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+    ]
+    for fmt in formats:
+        try:
+            opts={
+                "outtmpl":str(base)+".%(ext)s",
+                "format":fmt,
+                "merge_output_format":"mp4",
+                "ffmpeg_location":ffmpeg,
+                "noplaylist":True,
+                "quiet":True,
+                "no_warnings":True,
+                "retries":3,
+                "fragment_retries":3,
+                "concurrent_fragment_downloads":1,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info=ydl.extract_info(url,download=True)
+                prepared=Path(ydl.prepare_filename(info))
+                candidates=[output,prepared,prepared.with_suffix(".mp4"),base.with_suffix(".mp4"),base.with_suffix(".webm"),base.with_suffix(".mkv")]
+                for candidate in candidates:
+                    if candidate.exists() and candidate.stat().st_size:
+                        if candidate!=output:
+                            if output.exists(): output.unlink()
+                            candidate.replace(output)
+                        break
+                if output.exists() and output.stat().st_size: break
+        except Exception as exc:
+            errors.append(str(exc))
+    if not output.exists() or output.stat().st_size==0:
+        try:
+            response=requests.get(url,stream=True,timeout=90,headers={"User-Agent":"Mozilla/5.0 MovieRecapAI"})
+            response.raise_for_status()
+            content_type=response.headers.get("content-type","").lower()
+            if "text/html" in content_type or "application/json" in content_type:
+                raise RuntimeError("ဒီ link က direct video file မဟုတ်ပါ။")
+            size=0
+            with output.open("wb") as handle:
+                for block in response.iter_content(1024*1024):
+                    if not block: continue
+                    size+=len(block)
+                    if size>MAX_MB*1024*1024: raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
+                    handle.write(block)
+        except Exception as exc:
+            detail=errors[-1] if errors else str(exc)
+            raise RuntimeError(f"Video link ကို ရယူလို့မရပါ။ yt-dlp: {detail}") from exc
+    if output.stat().st_size>MAX_MB*1024*1024:
+        output.unlink(missing_ok=True)
+        raise ValueError("Video က 1GB ကျော်နေပါတယ်။")
 
 def youtube_search(query,token="",limit=20):
     key=st.secrets.get("YOUTUBE_API_KEY","")
