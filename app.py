@@ -2,9 +2,10 @@ import streamlit as st
 from gtts import gTTS
 import os
 
+# အက်ပ်ခေါင်းစဉ် သတ်မှတ်ခြင်း
 st.set_page_config(page_title="AI Movie Recap", layout="centered")
 
-# CSS ဖြင့် နောက်ခံအရောင်ကို လှပသော Premium Gradient ပြောင်းလဲခြင်း
+# ပိုမိုရိုးရှင်းပြီး အမှားကင်းသော CSS ဒီဇိုင်းစနစ်
 st.markdown("""
     <style>
     .stApp {
@@ -12,10 +13,9 @@ st.markdown("""
     }
     h1 {
         color: #38bdf8 !important;
-        font-family: 'Segoe UI', sans-serif;
     }
     </style>
-""", unsafe_allow_index=True)
+""", unsafe_allow_html=True)
 
 st.title("🎬 AI Movie Recap Generator")
 st.write("Google Colab သုံးရန်မလိုဘဲ လင့်ခ်ထည့်ရုံဖြင့် ချက်ချင်း Recap ပြုလုပ်ပေးမည့် အမြဲတမ်းပွင့်စနစ်")
@@ -65,4 +65,3 @@ if st.button("Generate Movie Recap ✨", type="primary"):
                 
             except Exception as e:
                 st.error(f"❌ လုပ်ဆောင်ချက် Error တက်သွားပါသည် - {str(e)}")
-
