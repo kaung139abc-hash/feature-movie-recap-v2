@@ -24,25 +24,28 @@ if st.button("Generate Movie Recap ✨", type="primary"):
     else:
         with st.spinner("🔄 AI က ဗီဒီယိုထဲက ဇာတ်ကြောင်းအစစ်အမှန်ကို စက္ကန့်ပိုင်းအတွင်း လေ့လာနေပါသည်..."):
             try:
-                # YouTube Link မှ ဗီဒီယို ID ကို ဆွဲထုတ်ခြင်း
+                # ----------------------------------------------------
+                # ၁။ YouTube Link မှ ဗီဒီယို ID ကို တိကျမှန်ကန်စွာ ဆွဲထုတ်ခြင်း (Regex စနစ်သုံးထားသည်)
+                # ----------------------------------------------------
                 video_id = ""
-                if "youtu.be/" in video_url:
-                    video_id = video_url.split("youtu.be/")[-1].split("?")
-                elif "watch?v=" in video_url:
-                    video_id = video_url.split("watch?v=")[-1].split("&")
+                import re
+                reg_exp = r'^.*(?:(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/)|(?:(?:watch)?\?v(?:i)?=|\&v(?:i)?=))([^#\&\?]*).*'
+                match = re.match(reg_exp, video_url)
+                if match:
+                    video_id = match.group(1)
 
                 if not video_id:
                     st.error("❌ YouTube ဗီဒီယိုလင့်ခ် မှားယွင်းနေပါသည်။")
                     st.stop()
 
-                # ၁။ ဗီဒီယိုထဲက မူရင်းစာသား (Subtitles) ကို အခမဲ့ ဆွဲယူခြင်း
+                # ၂။ ဗီဒီယိုထဲက မူရင်းစာသား (Subtitles) ကို အခမဲ့ ဆွဲယူခြင်း
                 try:
                     transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'zh', 'cn'])
                     original_text = " ".join([t['text'] for t in transcript_list])
                 except Exception:
                     original_text = "စာတန်းထိုး တိုက်ရိုက်မပါရှိပါ။ ဗီဒီယို ID အလိုက် အကောင်းဆုံး ဇာတ်လမ်းဆင်ပေးပါ။"
 
-                # ၂။ Gemini 3.6 Flash အသစ်ထံပေးပို့ပြီး ၁၀ မိနစ်စာ မြန်မာ Recap Script ရေးခိုင်းခြင်း
+                # ၃။ Gemini 3.6 Flash အသစ်ထံပေးပို့ပြီး ၁၀ မိနစ်စာ မြန်မာ Recap Script ရေးခိုင်းခြင်း
                 model = genai.GenerativeModel('gemini-3.6-flash')
                 prompt = (
                     "မင်းက ရုပ်ရှင်အညွှန်း ရေးသားသူ ဖြစ်ပါတယ်။ အောက်မှာ ပေးထားတဲ့ ရုပ်ရှင်ရဲ့ ဇာတ်ညွှန်း Context ကို ဖတ်ပြီး "
@@ -60,13 +63,13 @@ if st.button("Generate Movie Recap ✨", type="primary"):
                 st.subheader("📄 ဇာတ်လမ်းအစစ်အမှန် မြန်မာစာတန်း")
                 st.write(burmese_script)
                 
-                # ၃။ gTTS ဖြင့် မြန်မာနောက်ခံအသံဖိုင် ချက်ချင်းထုတ်ပေးခြင်း
+                # ၄။ gTTS ဖြင့် မြန်မာနောက်ခံအသံဖိုင် ချက်ချင်းထုတ်ပေးခြင်း
                 tts = gTTS(text=burmese_script, lang='my', slow=False)
                 tts.save("recap_voice.mp3")
                 st.subheader("🔊 AI နောက်ခံစကားပြော (Voiceover)")
                 st.audio("recap_voice.mp3", format="audio/mp3")
                 
-                # ၄။ ဗီဒီယိုကို Player အဖြစ် တိုက်ရိုက်ဆွဲပြခြင်း
+                # ၅။ ဗီဒီယိုကို Embed Link မှန်ကန်စွာဖြင့် Player အဖြစ် တိုက်ရိုက်ဆွဲပြခြင်း
                 st.subheader("📺 Recap ဗီဒီယိုမျက်နှာပြင်")
                 embed_link = f"https://youtube.com{video_id}"
                 st.video(embed_link)
