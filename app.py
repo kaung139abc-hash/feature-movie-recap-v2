@@ -49,7 +49,6 @@ def _move_result(stem, out, prepared):
 
 
 def download_video(url, out):
-    """Download accessible public media with yt-dlp; use direct HTTP only for actual media files."""
     import yt_dlp
     url = (url or "").strip()
     if not re.match(r"^https?://", url, re.I):
@@ -58,27 +57,17 @@ def download_video(url, out):
     stem = out.with_suffix("")
     host = (urlparse(url).hostname or "").lower()
     errors = []
-    # Never force an adaptive merge first: many sources expose a ready-to-use MP4.
     formats = [
         "best[ext=mp4][vcodec!=none][acodec!=none]",
         "best[vcodec!=none][acodec!=none]",
         "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
     ]
     common = {
-        "outtmpl": str(stem) + ".%(ext)s",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "retries": 4,
-        "fragment_retries": 4,
-        "file_access_retries": 3,
-        "socket_timeout": 30,
-        "concurrent_fragment_downloads": 1,
-        "ffmpeg_location": ff,
-        "merge_output_format": "mp4",
+        "outtmpl": str(stem) + ".%(ext)s", "noplaylist": True, "quiet": True, "no_warnings": True,
+        "retries": 4, "fragment_retries": 4, "file_access_retries": 3, "socket_timeout": 30,
+        "concurrent_fragment_downloads": 1, "ffmpeg_location": ff, "merge_output_format": "mp4",
         "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36", "Accept-Language": "en-US,en;q=0.9"},
     }
-    # Some current YouTube installations benefit from yt-dlp's EJS-enabled clients.
     if "youtube." in host or host.endswith("youtu.be"):
         common["extractor_args"] = {"youtube": {"player_client": ["web_safari", "web"]}}
     for fmt in formats:
@@ -92,7 +81,6 @@ def download_video(url, out):
         except Exception as e:
             errors.append(str(e))
     if not out.exists() or out.stat().st_size == 0:
-        # Only accept a direct media response here; do not mistake an HTML page for a video.
         try:
             headers = {"User-Agent": common["http_headers"]["User-Agent"], "Accept": "video/*,*/*;q=0.8"}
             r = requests.get(url, stream=True, timeout=90, allow_redirects=True, headers=headers)
@@ -172,7 +160,7 @@ def make_srt(text, seconds, out):
     if not lines: raise RuntimeError("Subtitle စာသားမရှိပါ။")
     weights = [max(1, len(x.replace(" ", ""))) for x in lines]; total = sum(weights); cur = 0.0; rows = []
     def ts(v):
-        ms = int(round((v % 1) * 1000)); n = int(v); h, rem = divmod(n,3600); m,s = divmod(rem,60)
+        ms = int(round((v%1)*1000)); n = int(v); h, rem = divmod(n,3600); m,s = divmod(rem,60)
         if ms == 1000: ms=0; s+=1
         return f"{h:02}:{m:02}:{s:02},{ms:03}"
     for i, line in enumerate(lines,1):
@@ -189,7 +177,7 @@ def sub_filter(path):
 def render(video, voice, sub, out, vertical):
     size = "720:1280" if vertical else "1280:720"
     vf = f"scale={size}:force_original_aspect_ratio=increase,crop={size},{sub_filter(sub)}"
-    ff(["-y","-stream_loop","-1","-i",str(video),"-i",str(voice),"-t",f"{duration(voice):.3f}","-map","0:v:0","-map","1:a:0","-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","27","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest",str(out)])
+    ffmpeg(["-y","-stream_loop","-1","-i",str(video),"-i",str(voice),"-t",f"{duration(voice):.3f}","-map","0:v:0","-map","1:a:0","-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","27","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest",str(out)])
 
 
 st.title("🎬 Movie Recap AI")
@@ -210,7 +198,7 @@ if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_
                 video.write_bytes(upload.getbuffer())
             else:
                 with st.spinner("🔗 Video ကို ရယူနေပါတယ်..."): download_video(url.strip(), video)
-            with st.spinner("🎙️ Audio ထုတ်နေပါတယ်..."): ff(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)])
+            with st.spinner("🎙️ Audio ထုတ်နေပါတယ်..."): ffmpeg(["-y","-i",str(video),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(wav)])
             with st.spinner("📝 Speech-to-text လုပ်နေပါတယ်..."): original=transcribe(wav)
             if not original: raise RuntimeError("Video ထဲက speech မရပါ။")
             with st.spinner("🇲🇲 မြန်မာလို recap လုပ်နေပါတယ်..."): script=recap_text(translate_mm(original))
