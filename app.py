@@ -11,6 +11,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Movie Recap AI", page_icon="🎬", layout="wide")
 MAX_BYTES = 1024 * 1024 * 1024
+TARGET_RECAP_CHARS = 7000
 VOICES = {"🇲🇲 Myanmar Male": "my-MM-ThihaNeural", "🇲🇲 Myanmar Female": "my-MM-NilarNeural"}
 
 
@@ -190,12 +191,44 @@ def translate_mm(text):
     return " ".join(tr.translate(x) for x in chunks)
 
 
-def recap_text(text):
-    parts = split_text(text)
-    if len(parts) <= 150:
-        return " ".join(parts)
-    ids = [round(i * (len(parts) - 1) / 149) for i in range(150)]
-    return " ".join(parts[i] for i in ids)
+def recap_text(text, target_chars=TARGET_RECAP_CHARS):
+    """Keep the full story arc while fitting the narration to about ten minutes."""
+    parts = split_text(text, 220)
+    if not parts:
+        return ""
+    full = " ".join(parts)
+    if len(full) <= target_chars:
+        return full
+
+    # Preserve beginning, middle and ending instead of taking only the first N sentences.
+    selected = []
+    used = 0
+    n = len(parts)
+    # Walk through the whole movie transcript with a roughly uniform stride.
+    stride = max(1, n / max(1, target_chars / 70))
+    pos = 0.0
+    seen = set()
+    while int(pos) < n and used < target_chars:
+        idx = min(n - 1, int(pos))
+        if idx not in seen:
+            piece = parts[idx]
+            remaining = target_chars - used
+            if len(piece) <= remaining:
+                selected.append(piece)
+                used += len(piece) + 1
+            elif remaining > 80:
+                selected.append(piece[:remaining].rsplit(" ", 1)[0].strip())
+                break
+            seen.add(idx)
+        pos += stride
+
+    # Guarantee the climax/ending is represented when the sampled stride misses it.
+    tail = parts[-1]
+    if tail and tail not in selected:
+        room = target_chars - sum(len(x) + 1 for x in selected)
+        if room > 100:
+            selected.append(tail if len(tail) <= room else tail[:room].rsplit(" ", 1)[0].strip())
+    return " ".join(selected)
 
 
 def transcribe(path):
@@ -253,14 +286,14 @@ def render(video, voice, sub, out, vertical):
 
 
 st.title("🎬 Movie Recap AI")
-st.caption("Link / Upload → Myanmar recap → Voice + Subtitle → MP4")
+st.caption("Full movie → approximately 10-minute Myanmar recap → Voice + Subtitle → MP4")
 with st.sidebar:
     vertical = st.selectbox("📱 Video Format", ["9:16", "16:9"]) == "9:16"
     voice = st.selectbox("🎙️ Myanmar Voice", list(VOICES))
 url = st.text_input("🔗 Movie / Video Link", placeholder="YouTube / TikTok / public video page / direct video URL")
 upload = st.file_uploader("🎞️ Video Upload (max 1GB)", type=["mp4", "mkv", "mov", "avi", "webm"])
 
-if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_width=True):
+if st.button("🚀 Generate 10-Minute Myanmar Movie Recap", type="primary", use_container_width=True):
     if not upload and not url.strip():
         st.error("Video upload လုပ်ပါ သို့မဟုတ် link ထည့်ပါ။")
         st.stop()
@@ -280,7 +313,6 @@ if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_
                     raise RuntimeError("Video က 1GB ကျော်နေပါတယ်။")
                 video.write_bytes(upload.getbuffer())
             else:
-                # YouTube transcript can keep recap working even when YouTube blocks server-side video download.
                 if youtube_id(url.strip()):
                     with st.spinner("📝 YouTube transcript ရှာနေပါတယ်..."):
                         transcript = youtube_transcript(url.strip())
@@ -299,27 +331,28 @@ if st.button("🚀 Generate Myanmar Movie Recap", type="primary", use_container_
             if not transcript or not transcript.strip():
                 raise RuntimeError("Video/Transcript ထဲက speech မရပါ။")
 
-            with st.spinner("🇲🇲 မြန်မာလို recap လုပ်နေပါတယ်..."):
-                script = recap_text(translate_mm(transcript))
+            with st.spinner("🧠 ဇာတ်လမ်းတစ်ကားလုံးကို 10 မိနစ်စာ recap အဖြစ်ချုံ့နေပါတယ်..."):
+                script = recap_text(translate_mm(transcript), TARGET_RECAP_CHARS)
             if not script:
                 raise RuntimeError("Recap စာသားမရပါ။")
+            st.caption(f"📝 Recap script: {len(script):,} characters (target ≈ {TARGET_RECAP_CHARS:,})")
+
             with st.spinner("🎙️ Myanmar voice ထုတ်နေပါတယ်..."):
                 make_tts(script, VOICES[voice], speech)
 
-            # Transcript-only mode has no downloadable source footage. Use a clean background
-            # so the narration/subtitle can still be delivered as a valid MP4.
             if not video.exists():
                 run_seconds = max(1.0, duration(speech))
                 ffmpeg(["-y", "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=24", "-t", f"{run_seconds:.3f}", "-an", str(video)])
 
             make_srt(script, duration(speech), sub)
-            with st.spinner("🎬 MP4 render လုပ်နေပါတယ်..."):
+            with st.spinner("🎬 Final MP4 render လုပ်နေပါတယ်..."):
                 render(video, speech, sub, out, vertical)
             if not out.exists() or out.stat().st_size == 0:
                 raise RuntimeError("Output MP4 မထွက်ပါ။")
-            st.success("✅ Myanmar Movie Recap MP4 ပြီးပါပြီ!")
+            final_minutes = duration(out) / 60
+            st.success(f"✅ Myanmar Movie Recap MP4 ပြီးပါပြီ — {final_minutes:.1f} minutes")
             st.video(str(out))
-            st.download_button("⬇️ Download MP4", out.read_bytes(), "movie_recap_mm.mp4", "video/mp4")
+            st.download_button("⬇️ Download MP4", out.read_bytes(), "movie_recap_10min_mm.mp4", "video/mp4")
     except Exception as e:
         st.error(f"❌ Generate Error: {e}")
         if not upload and url.strip():
