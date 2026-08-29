@@ -3,6 +3,9 @@ import axios from "axios";
 import Database from "better-sqlite3";
 import dotenv from "dotenv";
 import cors from "cors";
+import { spawn } from "child_process";
+import path from "path";
+import fs from "fs";
 
 dotenv.config();
 const app = express();
@@ -14,6 +17,9 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY;
 if (!TMDB_KEY) {
   console.warn("TMDB_API_KEY not set — search endpoints will fail until you set it.");
 }
+
+const OUT_DIR = process.env.OUT_DIR || "outputs";
+if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
 // init sqlite
 const db = new Database("recaps.db");
@@ -27,6 +33,24 @@ CREATE TABLE IF NOT EXISTS recaps (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 `);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS video_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  input_url TEXT,
+  status TEXT,
+  progress TEXT,
+  mode TEXT,
+  output_path TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
+// serve frontend
+app.use(express.static("public"));
+// serve generated outputs
+app.use("/outputs", express.static(OUT_DIR));
 
 // TMDB search
 app.get("/api/search", async (req, res) => {
@@ -110,6 +134,30 @@ app.get("/api/recaps", (req, res) => {
 app.get("/api/recap/:id", (req, res) => {
   const row = db.prepare("SELECT * FROM recaps WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "not found" });
+  res.json(row);
+});
+
+// Create video job
+app.post('/api/create-video', (req, res) => {
+  const { url, mode } = req.body;
+  if (!url) return res.status(400).json({ error: 'url required' });
+  const m = mode === '2d' ? '2d' : '3d';
+  const insert = db.prepare('INSERT INTO video_jobs (input_url, status, progress, mode) VALUES (?,?,?,?)');
+  const info = insert.run(url, 'queued', 'created', m);
+  const jobId = info.lastInsertRowid;
+  // spawn background worker
+  const workerScript = m === '2d' ? 'create_video_worker_2d.js' : 'create_video_worker.js';
+  const worker = spawn(process.execPath, [workerScript, String(jobId)], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  worker.unref();
+  res.json({ jobId, mode: m });
+});
+
+app.get('/api/job/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM video_jobs WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
   res.json(row);
 });
 

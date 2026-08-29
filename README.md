@@ -1,1 +1,1 @@
-Updated README: added instructions for Blender + Rhubarb requirements and how to supply a character model (assets/character.glb).
+Added 2D portrait worker and server support for mode=2d. See assets/ for required portrait and mouth sprites. Updated server to spawn worker based on mode.
